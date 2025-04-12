@@ -50,6 +50,32 @@ func main() {
 	// 	}
 	// }()
 
+	// Example: Create a student
+	time.Sleep(2 * time.Second)
+
+	// Create a student with 2 semesters
+	semesters := []core.Semester{
+		{SemesterNumber: 1, SGPA: 3.5},
+		{SemesterNumber: 2, SGPA: 3.8},
+	}
+
+	if err := createStudent(validatorPrivKey, "STU001", true, semesters); err != nil {
+		log.Fatal(err)
+	}
+
+	// Update student's semester data
+	time.Sleep(2 * time.Second)
+	semesters = append(semesters, core.Semester{SemesterNumber: 3, SGPA: 4.0})
+	if err := updateStudent(validatorPrivKey, "STU001", true, semesters); err != nil {
+		log.Fatal(err)
+	}
+
+	// Delete student
+	time.Sleep(2 * time.Second)
+	if err := deleteStudent(validatorPrivKey, "STU001"); err != nil {
+		log.Fatal(err)
+	}
+
 	select {}
 }
 
@@ -162,4 +188,59 @@ func nftMinter(privKey crypto.PrivateKey, collection types.Hash) {
 	if err != nil {
 		panic(err)
 	}
+}
+
+func createStudentTx(privKey crypto.PrivateKey, studentID string, student *core.Student, txType core.StudentTxType) error {
+	tx := core.NewTransaction(nil)
+	tx.TxInner = core.StudentTx{
+		Type:      txType,
+		StudentID: studentID,
+		Student:   student,
+		Fee:       100, // Fixed fee for student transactions
+	}
+
+	if err := tx.Sign(privKey); err != nil {
+		return err
+	}
+
+	buf := &bytes.Buffer{}
+	if err := tx.Encode(core.NewGobTxEncoder(buf)); err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest("POST", "http://localhost:9000/tx", buf)
+	if err != nil {
+		return err
+	}
+
+	client := http.Client{}
+	_, err = client.Do(req)
+
+	return err
+}
+
+func createStudent(privKey crypto.PrivateKey, studentID string, paidDues bool, semesters []core.Semester) error {
+	student := &core.Student{
+		ID:        studentID,
+		PaidDues:  paidDues,
+		Semesters: semesters,
+	}
+	student.CalculateCGPA()
+
+	return createStudentTx(privKey, studentID, student, core.StudentTxTypeCreate)
+}
+
+func updateStudent(privKey crypto.PrivateKey, studentID string, paidDues bool, semesters []core.Semester) error {
+	student := &core.Student{
+		ID:        studentID,
+		PaidDues:  paidDues,
+		Semesters: semesters,
+	}
+	student.CalculateCGPA()
+
+	return createStudentTx(privKey, studentID, student, core.StudentTxTypeUpdate)
+}
+
+func deleteStudent(privKey crypto.PrivateKey, studentID string) error {
+	return createStudentTx(privKey, studentID, nil, core.StudentTxTypeDelete)
 }

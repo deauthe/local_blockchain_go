@@ -24,6 +24,7 @@ type Blockchain struct {
 	stateLock       sync.RWMutex
 	collectionState map[types.Hash]*CollectionTx
 	mintState       map[types.Hash]*MintTx
+	studentState    map[string]*Student
 	validator       Validator
 	// TODO: make this an interface.
 	contractState *State
@@ -46,6 +47,7 @@ func NewBlockchain(l log.Logger, genesis *Block) (*Blockchain, error) {
 		accountState:    accountState,
 		collectionState: make(map[types.Hash]*CollectionTx),
 		mintState:       make(map[types.Hash]*MintTx),
+		studentState:    make(map[string]*Student),
 		blockStore:      make(map[types.Hash]*Block),
 		txStore:         make(map[types.Hash]*Transaction),
 	}
@@ -158,6 +160,41 @@ func (bc *Blockchain) Height() uint32 {
 	return uint32(len(bc.headers) - 1)
 }
 
+func (bc *Blockchain) handleStudentTx(tx *Transaction) error {
+	studentTx, ok := tx.TxInner.(StudentTx)
+	if !ok {
+		return fmt.Errorf("invalid student transaction type")
+	}
+
+	bc.stateLock.Lock()
+	defer bc.stateLock.Unlock()
+
+	switch studentTx.Type {
+	case StudentTxTypeCreate:
+		if _, exists := bc.studentState[studentTx.StudentID]; exists {
+			return fmt.Errorf("student with ID %s already exists", studentTx.StudentID)
+		}
+		bc.studentState[studentTx.StudentID] = studentTx.Student
+		bc.logger.Log("msg", "created new student", "id", studentTx.StudentID)
+
+	case StudentTxTypeUpdate:
+		if _, exists := bc.studentState[studentTx.StudentID]; !exists {
+			return fmt.Errorf("student with ID %s does not exist", studentTx.StudentID)
+		}
+		bc.studentState[studentTx.StudentID] = studentTx.Student
+		bc.logger.Log("msg", "updated student", "id", studentTx.StudentID)
+
+	case StudentTxTypeDelete:
+		if _, exists := bc.studentState[studentTx.StudentID]; !exists {
+			return fmt.Errorf("student with ID %s does not exist", studentTx.StudentID)
+		}
+		delete(bc.studentState, studentTx.StudentID)
+		bc.logger.Log("msg", "deleted student", "id", studentTx.StudentID)
+	}
+
+	return nil
+}
+
 func (bc *Blockchain) handleTransaction(tx *Transaction) error {
 	// If we have data inside execute that data on the VM.
 	if len(tx.Data) > 0 {
@@ -167,6 +204,11 @@ func (bc *Blockchain) handleTransaction(tx *Transaction) error {
 		if err := vm.Run(); err != nil {
 			return err
 		}
+	}
+
+	// Handle student transactions
+	if _, ok := tx.TxInner.(StudentTx); ok {
+		return bc.handleStudentTx(tx)
 	}
 
 	// If the txInner of the transaction is not nil we need to handle
