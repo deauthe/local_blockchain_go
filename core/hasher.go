@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/gob"
 
 	"github.com/deauthe/local_blockchain_go/types"
 )
@@ -21,9 +22,16 @@ func (BlockHasher) Hash(b *Header) types.Hash {
 
 type TxHasher struct{}
 
-// Hash will hash the whole bytes of the TX no exception.
+// Hash will hash the whole bytes of the TX including the TxInner field
 func (TxHasher) Hash(tx *Transaction) types.Hash {
 	buf := new(bytes.Buffer)
+
+	// Encode TxInner if it exists
+	if tx.TxInner != nil {
+		if err := gob.NewEncoder(buf).Encode(tx.TxInner); err != nil {
+			panic(err)
+		}
+	}
 
 	binary.Write(buf, binary.LittleEndian, tx.Data)
 	binary.Write(buf, binary.LittleEndian, tx.To)

@@ -48,4 +48,5 @@ func init() {
 	gob.Register(StudentTx{})
 	gob.Register(Student{})
 	gob.Register(Semester{})
+	gob.Register(StudentTxType(0))
 }

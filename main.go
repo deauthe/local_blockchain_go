@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -15,67 +16,83 @@ import (
 )
 
 func main() {
+	// Create validator node with private key
 	validatorPrivKey := crypto.GeneratePrivateKey()
 	localNode := makeServer("LOCAL_NODE", &validatorPrivKey, ":3000", []string{":4000"}, ":9000")
 	go localNode.Start()
 
+	// Create remote nodes for network
 	remoteNode := makeServer("REMOTE_NODE", nil, ":4000", []string{":5000"}, "")
 	go remoteNode.Start()
 
 	remoteNodeB := makeServer("REMOTE_NODE_B", nil, ":5000", nil, "")
 	go remoteNodeB.Start()
 
-	go func() {
-		time.Sleep(11 * time.Second)
-
-		lateNode := makeServer("LATE_NODE", nil, ":6000", []string{":4000"}, "")
-		go lateNode.Start()
-	}()
-
-	time.Sleep(1 * time.Second)
-
-	// if err := sendTransaction(validatorPrivKey); err != nil {
-	// 	panic(err)
-	// }
-
-	// collectionOwnerPrivKey := crypto.GeneratePrivateKey()
-	// collectionHash := createCollectionTx(collectionOwnerPrivKey)
-
-	// txSendTicker := time.NewTicker(1 * time.Second)
-	// go func() {
-	// 	for i := 0; i < 20; i++ {
-	// 		nftMinter(collectionOwnerPrivKey, collectionHash)
-
-	// 		<-txSendTicker.C
-	// 	}
-	// }()
-
-	// Example: Create a student
+	// Wait for network to stabilize
 	time.Sleep(2 * time.Second)
 
-	// Create a student with 2 semesters
-	semesters := []core.Semester{
-		{SemesterNumber: 1, SGPA: 3.5},
-		{SemesterNumber: 2, SGPA: 3.8},
+	fmt.Println("Starting student operations demonstration...")
+
+	// Create multiple students with different semesters
+	students := []struct {
+		id        string
+		paidDues  bool
+		semesters []core.Semester
+	}{
+		{
+			id:       "STU001",
+			paidDues: true,
+			semesters: []core.Semester{
+				{SemesterNumber: 1, SGPA: 3.5},
+				{SemesterNumber: 2, SGPA: 3.8},
+			},
+		},
+		{
+			id:       "STU002",
+			paidDues: true,
+			semesters: []core.Semester{
+				{SemesterNumber: 1, SGPA: 3.2},
+				{SemesterNumber: 2, SGPA: 3.6},
+				{SemesterNumber: 3, SGPA: 3.9},
+			},
+		},
 	}
 
-	if err := createStudent(validatorPrivKey, "STU001", true, semesters); err != nil {
+	// Create students
+	fmt.Println("\nCreating students...")
+	for _, student := range students {
+		fmt.Printf("Creating student %s...\n", student.id)
+		if err := createStudent(validatorPrivKey, student.id, student.paidDues, student.semesters); err != nil {
+			log.Fatal(err)
+		}
+		time.Sleep(1 * time.Second) // Wait for transaction to be processed
+	}
+
+	// Update students
+	fmt.Println("\nUpdating students...")
+	for _, student := range students {
+		// Add a new semester to each student
+		updatedSemesters := append(student.semesters, core.Semester{
+			SemesterNumber: len(student.semesters) + 1,
+			SGPA:           4.0,
+		})
+
+		fmt.Printf("Updating student %s with new semester...\n", student.id)
+		if err := updateStudent(validatorPrivKey, student.id, student.paidDues, updatedSemesters); err != nil {
+			log.Fatal(err)
+		}
+		time.Sleep(1 * time.Second) // Wait for transaction to be processed
+	}
+
+	// Delete one student
+	fmt.Println("\nDeleting a student...")
+	if err := deleteStudent(validatorPrivKey, students[0].id); err != nil {
 		log.Fatal(err)
 	}
 
-	// Update student's semester data
-	time.Sleep(2 * time.Second)
-	semesters = append(semesters, core.Semester{SemesterNumber: 3, SGPA: 4.0})
-	if err := updateStudent(validatorPrivKey, "STU001", true, semesters); err != nil {
-		log.Fatal(err)
-	}
-
-	// Delete student
-	time.Sleep(2 * time.Second)
-	if err := deleteStudent(validatorPrivKey, "STU001"); err != nil {
-		log.Fatal(err)
-	}
-
+	// Keep the program running to see the blockchain state
+	fmt.Println("\nStudent operations completed. Blockchain is running...")
+	fmt.Println("Check the blockchain state through the API endpoints.")
 	select {}
 }
 
@@ -198,6 +215,9 @@ func createStudentTx(privKey crypto.PrivateKey, studentID string, student *core.
 		Student:   student,
 		Fee:       100, // Fixed fee for student transactions
 	}
+
+	// Set the From field before signing
+	tx.From = privKey.PublicKey()
 
 	if err := tx.Sign(privKey); err != nil {
 		return err

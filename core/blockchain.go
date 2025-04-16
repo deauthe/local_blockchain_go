@@ -161,7 +161,7 @@ func (bc *Blockchain) Height() uint32 {
 }
 
 func (bc *Blockchain) handleStudentTx(tx *Transaction) error {
-	studentTx, ok := tx.TxInner.(StudentTx)
+	studentTx, ok := tx.TxInner.(*StudentTx)
 	if !ok {
 		return fmt.Errorf("invalid student transaction type")
 	}
