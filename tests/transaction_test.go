@@ -1,17 +1,18 @@
-package core
+package core_test
 
 import (
 	"bytes"
 	"encoding/gob"
 	"testing"
 
+	"github.com/deauthe/local_blockchain_go/core"
 	"github.com/deauthe/local_blockchain_go/crypto"
 	"github.com/deauthe/local_blockchain_go/types"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestVerifyTransactionWithTamper(t *testing.T) {
-	tx := NewTransaction(nil)
+	tx := core.NewTransaction(nil)
 
 	fromPrivKey := crypto.GeneratePrivateKey()
 	toPrivKey := crypto.GeneratePrivateKey()
@@ -22,7 +23,7 @@ func TestVerifyTransactionWithTamper(t *testing.T) {
 	tx.Value = 666
 
 	assert.Nil(t, tx.Sign(fromPrivKey))
-	tx.hash = types.Hash{}
+	tx.TxHash = types.Hash{}
 
 	tx.To = hackerPrivKey.PublicKey()
 
@@ -30,22 +31,22 @@ func TestVerifyTransactionWithTamper(t *testing.T) {
 }
 
 func TestNFTTransaction(t *testing.T) {
-	collectionTx := CollectionTx{
+	collectionTx := core.CollectionTx{
 		Fee:      200,
 		MetaData: []byte("The beginning of a new collection"),
 	}
 
 	privKey := crypto.GeneratePrivateKey()
-	tx := &Transaction{
+	tx := &core.Transaction{
 		TxInner: collectionTx,
 	}
 	tx.Sign(privKey)
-	tx.hash = types.Hash{}
+	tx.TxHash = types.Hash{}
 
 	buf := new(bytes.Buffer)
 	assert.Nil(t, gob.NewEncoder(buf).Encode(tx))
 
-	txDecoded := &Transaction{}
+	txDecoded := &core.Transaction{}
 	assert.Nil(t, gob.NewDecoder(buf).Decode(txDecoded))
 	assert.Equal(t, tx, txDecoded)
 }
@@ -53,7 +54,7 @@ func TestNFTTransaction(t *testing.T) {
 func TestNativeTransferTransaction(t *testing.T) {
 	fromPrivKey := crypto.GeneratePrivateKey()
 	toPrivKey := crypto.GeneratePrivateKey()
-	tx := &Transaction{
+	tx := &core.Transaction{
 		To:    toPrivKey.PublicKey(),
 		Value: 666,
 	}
@@ -63,7 +64,7 @@ func TestNativeTransferTransaction(t *testing.T) {
 
 func TestSignTransaction(t *testing.T) {
 	privKey := crypto.GeneratePrivateKey()
-	tx := &Transaction{
+	tx := &core.Transaction{
 		Data: []byte("foo"),
 	}
 
@@ -73,7 +74,7 @@ func TestSignTransaction(t *testing.T) {
 
 func TestVerifyTransaction(t *testing.T) {
 	privKey := crypto.GeneratePrivateKey()
-	tx := &Transaction{
+	tx := &core.Transaction{
 		Data: []byte("foo"),
 	}
 
@@ -89,17 +90,17 @@ func TestVerifyTransaction(t *testing.T) {
 func TestTxEncodeDecode(t *testing.T) {
 	tx := randomTxWithSignature(t)
 	buf := &bytes.Buffer{}
-	assert.Nil(t, tx.Encode(NewGobTxEncoder(buf)))
-	tx.hash = types.Hash{}
+	assert.Nil(t, tx.Encode(core.NewGobTxEncoder(buf)))
+	tx.TxHash = types.Hash{}
 
-	txDecoded := new(Transaction)
-	assert.Nil(t, txDecoded.Decode(NewGobTxDecoder(buf)))
+	txDecoded := new(core.Transaction)
+	assert.Nil(t, txDecoded.Decode(core.NewGobTxDecoder(buf)))
 	assert.Equal(t, tx, txDecoded)
 }
 
-func randomTxWithSignature(t *testing.T) *Transaction {
+func randomTxWithSignature(t *testing.T) *core.Transaction {
 	privKey := crypto.GeneratePrivateKey()
-	tx := Transaction{
+	tx := core.Transaction{
 		Data: []byte("foo"),
 	}
 	assert.Nil(t, tx.Sign(privKey))

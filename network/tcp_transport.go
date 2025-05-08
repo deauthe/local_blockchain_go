@@ -5,16 +5,32 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 )
 
 type TCPPeer struct {
 	conn     net.Conn
 	Outgoing bool
+	closed   bool
+	mu       sync.RWMutex
 }
 
 func (p *TCPPeer) Send(b []byte) error {
+	p.mu.RLock()
+	if p.closed {
+		p.mu.RUnlock()
+		return fmt.Errorf("connection closed")
+	}
+	p.mu.RUnlock()
+
 	_, err := p.conn.Write(b)
-	return err
+	if err != nil {
+		p.mu.Lock()
+		p.closed = true
+		p.mu.Unlock()
+		return fmt.Errorf("failed to send data: %v", err)
+	}
+	return nil
 }
 
 func (p *TCPPeer) readLoop(rpcCh chan RPC) {
@@ -22,11 +38,17 @@ func (p *TCPPeer) readLoop(rpcCh chan RPC) {
 	for {
 		n, err := p.conn.Read(buf)
 		if err == io.EOF {
-			continue
+			p.mu.Lock()
+			p.closed = true
+			p.mu.Unlock()
+			return
 		}
 		if err != nil {
+			p.mu.Lock()
+			p.closed = true
+			p.mu.Unlock()
 			fmt.Printf("read error: %s", err)
-			continue
+			return
 		}
 
 		msg := buf[:n]
@@ -35,6 +57,18 @@ func (p *TCPPeer) readLoop(rpcCh chan RPC) {
 			Payload: bytes.NewReader(msg),
 		}
 	}
+}
+
+func (p *TCPPeer) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.closed {
+		return nil
+	}
+
+	p.closed = true
+	return p.conn.Close()
 }
 
 type TCPTransport struct {

@@ -10,12 +10,12 @@ import (
 
 func TestTxMaxLength(t *testing.T) {
 	p := NewTxPool(1)
-	p.Add(util.NewRandomTransaction(10))
+	p.Add(util.NewRandomTransaction(100))
 	assert.Equal(t, 1, p.all.Count())
 
-	p.Add(util.NewRandomTransaction(10))
-	p.Add(util.NewRandomTransaction(10))
-	p.Add(util.NewRandomTransaction(10))
+	p.Add(util.NewRandomTransaction(100))
+	p.Add(util.NewRandomTransaction(100))
+	p.Add(util.NewRandomTransaction(100))
 	tx := util.NewRandomTransaction(100)
 	p.Add(tx)
 	assert.Equal(t, 1, p.all.Count())

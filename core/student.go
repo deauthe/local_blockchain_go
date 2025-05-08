@@ -45,8 +45,9 @@ func (s *Student) CalculateCGPA() {
 }
 
 func init() {
-	gob.Register(StudentTx{})
-	gob.Register(Student{})
+	// Register types in order of dependency
 	gob.Register(Semester{})
+	gob.Register(Student{})
 	gob.Register(StudentTxType(0))
+	gob.Register(StudentTx{})
 }

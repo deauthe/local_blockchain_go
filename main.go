@@ -2,209 +2,110 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/deauthe/local_blockchain_go/core"
 	"github.com/deauthe/local_blockchain_go/crypto"
+	"github.com/deauthe/local_blockchain_go/mock"
 	"github.com/deauthe/local_blockchain_go/network"
-	"github.com/deauthe/local_blockchain_go/types"
 	"github.com/deauthe/local_blockchain_go/util"
+	"github.com/go-kit/log"
 )
 
 func main() {
+	// Initialize logger
+	logger, err := util.NewLogger("blockchain")
+	if err != nil {
+		fmt.Printf("Failed to create logger: %v\n", err)
+		os.Exit(1)
+	}
+
 	// Create validator node with private key
 	validatorPrivKey := crypto.GeneratePrivateKey()
-	localNode := makeServer("LOCAL_NODE", &validatorPrivKey, ":3000", []string{":4000"}, ":9000")
+	localNode := makeServer("LOCAL_NODE", &validatorPrivKey, ":3000", []string{":4000"}, ":9000", logger)
 	go localNode.Start()
 
 	// Create remote nodes for network
-	remoteNode := makeServer("REMOTE_NODE", nil, ":4000", []string{":5000"}, "")
-	go remoteNode.Start()
-
-	remoteNodeB := makeServer("REMOTE_NODE_B", nil, ":5000", nil, "")
+	remoteNodeB := makeServer("REMOTE_NODE", nil, ":5000", nil, "", logger)
 	go remoteNodeB.Start()
+
+	remoteNode := makeServer("REMOTE_NODE_B", nil, ":4000", []string{":5000"}, "", logger)
+	go remoteNode.Start()
 
 	// Wait for network to stabilize
 	time.Sleep(2 * time.Second)
 
-	fmt.Println("Starting student operations demonstration...")
+	logger.Log("msg", "Starting student operations demonstration...")
 
 	// Create multiple students with different semesters
-	students := []struct {
-		id        string
-		paidDues  bool
-		semesters []core.Semester
-	}{
-		{
-			id:       "STU001",
-			paidDues: true,
-			semesters: []core.Semester{
-				{SemesterNumber: 1, SGPA: 3.5},
-				{SemesterNumber: 2, SGPA: 3.8},
-			},
-		},
-		{
-			id:       "STU002",
-			paidDues: true,
-			semesters: []core.Semester{
-				{SemesterNumber: 1, SGPA: 3.2},
-				{SemesterNumber: 2, SGPA: 3.6},
-				{SemesterNumber: 3, SGPA: 3.9},
-			},
-		},
-	}
 
 	// Create students
-	fmt.Println("\nCreating students...")
-	for _, student := range students {
-		fmt.Printf("Creating student %s...\n", student.id)
-		if err := createStudent(validatorPrivKey, student.id, student.paidDues, student.semesters); err != nil {
-			log.Fatal(err)
+	logger.Log("msg", "Creating students...")
+	for _, student := range mock.MockStudents {
+		startTime := time.Now()
+		logger.Log("msg", fmt.Sprintf("Creating student %s...", student.Id))
+		if err := createStudent(validatorPrivKey, student.Id, student.PaidDues, student.Semesters); err != nil {
+			logger.Log("msg", fmt.Sprintf("Error creating student %s: %v (took %v)", student.Id, err, time.Since(startTime)))
+			os.Exit(1)
 		}
+		util.LogWithTiming(logger, startTime, "Created student %s", student.Id)
 		time.Sleep(1 * time.Second) // Wait for transaction to be processed
 	}
 
 	// Update students
-	fmt.Println("\nUpdating students...")
-	for _, student := range students {
+	logger.Log("msg", "Updating students...")
+	for _, student := range mock.MockStudents {
+		startTime := time.Now()
 		// Add a new semester to each student
-		updatedSemesters := append(student.semesters, core.Semester{
-			SemesterNumber: len(student.semesters) + 1,
+		updatedSemesters := append(student.Semesters, core.Semester{
+			SemesterNumber: len(student.Semesters) + 1,
 			SGPA:           4.0,
 		})
 
-		fmt.Printf("Updating student %s with new semester...\n", student.id)
-		if err := updateStudent(validatorPrivKey, student.id, student.paidDues, updatedSemesters); err != nil {
-			log.Fatal(err)
+		logger.Log("msg", fmt.Sprintf("Updating student %s with new semester...", student.Id))
+		if err := updateStudent(validatorPrivKey, student.Id, student.PaidDues, updatedSemesters); err != nil {
+			logger.Log("msg", fmt.Sprintf("Error updating student %s: %v (took %v)", student.Id, err, time.Since(startTime)))
+			os.Exit(1)
 		}
+		util.LogWithTiming(logger, startTime, "Updated student %s", student.Id)
 		time.Sleep(1 * time.Second) // Wait for transaction to be processed
 	}
 
 	// Delete one student
-	fmt.Println("\nDeleting a student...")
-	if err := deleteStudent(validatorPrivKey, students[0].id); err != nil {
-		log.Fatal(err)
+	logger.Log("msg", "Deleting a student...")
+	startTime := time.Now()
+	if err := deleteStudent(validatorPrivKey, mock.MockStudents[0].Id); err != nil {
+		logger.Log("msg", fmt.Sprintf("Error deleting student %s: %v (took %v)", mock.MockStudents[0].Id, err, time.Since(startTime)))
+		os.Exit(1)
 	}
+	util.LogWithTiming(logger, startTime, "Deleted student %s", mock.MockStudents[0].Id)
 
 	// Keep the program running to see the blockchain state
-	fmt.Println("\nStudent operations completed. Blockchain is running...")
-	fmt.Println("Check the blockchain state through the API endpoints.")
+	logger.Log("msg", "Student operations completed. Blockchain is running...")
+	logger.Log("msg", "Check the blockchain state through the API endpoints.")
 	select {}
 }
 
-func sendTransaction(privKey crypto.PrivateKey) error {
-	toPrivKey := crypto.GeneratePrivateKey()
-
-	tx := core.NewTransaction(nil)
-	tx.To = toPrivKey.PublicKey()
-	tx.Value = 666
-
-	if err := tx.Sign(privKey); err != nil {
-		return err
-	}
-
-	buf := &bytes.Buffer{}
-	if err := tx.Encode(core.NewGobTxEncoder(buf)); err != nil {
-		panic(err)
-	}
-
-	req, err := http.NewRequest("POST", "http://localhost:9000/tx", buf)
-	if err != nil {
-		panic(err)
-	}
-
-	client := http.Client{}
-	_, err = client.Do(req)
-
-	return err
-}
-
-func makeServer(id string, pk *crypto.PrivateKey, addr string, seedNodes []string, apiListenAddr string) *network.Server {
+func makeServer(id string, pk *crypto.PrivateKey, addr string, seedNodes []string, apiListenAddr string, logger log.Logger) *network.Server {
 	opts := network.ServerOpts{
 		APIListenAddr: apiListenAddr,
 		SeedNodes:     seedNodes,
 		ListenAddr:    addr,
 		PrivateKey:    pk,
 		ID:            id,
+		Logger:        logger,
 	}
 
 	s, err := network.NewServer(opts)
 	if err != nil {
-		log.Fatal(err)
+		logger.Log("msg", fmt.Sprintf("Error creating server %s: %v", id, err))
+		os.Exit(1)
 	}
 
 	return s
-}
-
-func createCollectionTx(privKey crypto.PrivateKey) types.Hash {
-	tx := core.NewTransaction(nil)
-	tx.TxInner = core.CollectionTx{
-		Fee:      200,
-		MetaData: []byte("chicken and egg collection!"),
-	}
-	tx.Sign(privKey)
-
-	buf := &bytes.Buffer{}
-	if err := tx.Encode(core.NewGobTxEncoder(buf)); err != nil {
-		panic(err)
-	}
-
-	req, err := http.NewRequest("POST", "http://localhost:9000/tx", buf)
-	if err != nil {
-		panic(err)
-	}
-
-	client := http.Client{}
-	_, err = client.Do(req)
-	if err != nil {
-		panic(err)
-	}
-
-	return tx.Hash(core.TxHasher{})
-}
-
-func nftMinter(privKey crypto.PrivateKey, collection types.Hash) {
-	metaData := map[string]any{
-		"power":  8,
-		"health": 100,
-		"color":  "green",
-		"rare":   "yes",
-	}
-
-	metaBuf := new(bytes.Buffer)
-	if err := json.NewEncoder(metaBuf).Encode(metaData); err != nil {
-		panic(err)
-	}
-
-	tx := core.NewTransaction(nil)
-	tx.TxInner = core.MintTx{
-		Fee:             200,
-		NFT:             util.RandomHash(),
-		MetaData:        metaBuf.Bytes(),
-		Collection:      collection,
-		CollectionOwner: privKey.PublicKey(),
-	}
-	tx.Sign(privKey)
-
-	buf := &bytes.Buffer{}
-	if err := tx.Encode(core.NewGobTxEncoder(buf)); err != nil {
-		panic(err)
-	}
-
-	req, err := http.NewRequest("POST", "http://localhost:9000/tx", buf)
-	if err != nil {
-		panic(err)
-	}
-
-	client := http.Client{}
-	_, err = client.Do(req)
-	if err != nil {
-		panic(err)
-	}
 }
 
 func createStudentTx(privKey crypto.PrivateKey, studentID string, student *core.Student, txType core.StudentTxType) error {

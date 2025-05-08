@@ -1,10 +1,11 @@
-package core
+package core_test
 
 import (
 	"bytes"
 	"testing"
 	"time"
 
+	"github.com/deauthe/local_blockchain_go/core"
 	"github.com/deauthe/local_blockchain_go/crypto"
 	"github.com/deauthe/local_blockchain_go/types"
 	"github.com/stretchr/testify/assert"
@@ -12,7 +13,7 @@ import (
 
 func TestSignBlock(t *testing.T) {
 	privKey := crypto.GeneratePrivateKey()
-	b := randomBlock(t, 0, types.Hash{})
+	b := RandomBlock(t, 0, types.Hash{})
 
 	assert.Nil(t, b.Sign(privKey))
 	assert.NotNil(t, b.Signature)
@@ -20,7 +21,7 @@ func TestSignBlock(t *testing.T) {
 
 func TestVerifyBlock(t *testing.T) {
 	privKey := crypto.GeneratePrivateKey()
-	b := randomBlock(t, 0, types.Hash{})
+	b := RandomBlock(t, 0, types.Hash{})
 
 	assert.Nil(t, b.Sign(privKey))
 	assert.Nil(t, b.Verify())
@@ -34,17 +35,17 @@ func TestVerifyBlock(t *testing.T) {
 }
 
 func TestDecodeEncodeBlock(t *testing.T) {
-	b := randomBlock(t, 1, types.Hash{})
+	b := RandomBlock(t, 1, types.Hash{})
 	buf := &bytes.Buffer{}
-	assert.Nil(t, b.Encode(NewGobBlockEncoder(buf)))
+	assert.Nil(t, b.Encode(core.NewGobBlockEncoder(buf)))
 
-	bDecode := new(Block)
-	assert.Nil(t, bDecode.Decode(NewGobBlockDecoder(buf)))
+	bDecode := new(core.Block)
+	assert.Nil(t, bDecode.Decode(core.NewGobBlockDecoder(buf)))
 
 	assert.Equal(t, b.Header, bDecode.Header)
 
 	for i := 0; i < len(b.Transactions); i++ {
-		b.Transactions[i].hash = types.Hash{}
+		b.Transactions[i].TxHash = types.Hash{}
 		assert.Equal(t, b.Transactions[i], bDecode.Transactions[i])
 	}
 
@@ -52,19 +53,19 @@ func TestDecodeEncodeBlock(t *testing.T) {
 	assert.Equal(t, b.Signature, bDecode.Signature)
 }
 
-func randomBlock(t *testing.T, height uint32, prevBlockHash types.Hash) *Block {
+func RandomBlock(t *testing.T, height uint32, prevBlockHash types.Hash) *core.Block {
 	privKey := crypto.GeneratePrivateKey()
 	tx := randomTxWithSignature(t)
-	header := &Header{
+	header := &core.Header{
 		Version:       1,
 		PrevBlockHash: prevBlockHash,
 		Height:        height,
 		Timestamp:     time.Now().UnixNano(),
 	}
 
-	b, err := NewBlock(header, []*Transaction{tx})
+	b, err := core.NewBlock(header, []*core.Transaction{tx})
 	assert.Nil(t, err)
-	dataHash, err := CalculateDataHash(b.Transactions)
+	dataHash, err := core.CalculateDataHash(b.Transactions)
 	assert.Nil(t, err)
 	b.Header.DataHash = dataHash
 	assert.Nil(t, b.Sign(privKey))

@@ -1,14 +1,15 @@
-package core
+package core_test
 
 import (
 	"testing"
 
+	"github.com/deauthe/local_blockchain_go/core"
 	"github.com/deauthe/local_blockchain_go/crypto"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestAccounState(t *testing.T) {
-	state := NewAccountState()
+	state := core.NewAccountState()
 
 	address := crypto.GeneratePrivateKey().PublicKey().Address()
 	account := state.CreateAccount(address)
@@ -22,7 +23,7 @@ func TestAccounState(t *testing.T) {
 }
 
 func TestTransferFailInsufficientBalance(t *testing.T) {
-	state := NewAccountState()
+	state := core.NewAccountState()
 
 	addressBob := crypto.GeneratePrivateKey().PublicKey().Address()
 	addressAlice := crypto.GeneratePrivateKey().PublicKey().Address()
@@ -38,7 +39,7 @@ func TestTransferFailInsufficientBalance(t *testing.T) {
 }
 
 func TestTransferSuccessEmpyToAccount(t *testing.T) {
-	state := NewAccountState()
+	state := core.NewAccountState()
 
 	addressBob := crypto.GeneratePrivateKey().PublicKey().Address()
 	addressAlice := crypto.GeneratePrivateKey().PublicKey().Address()

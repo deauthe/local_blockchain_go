@@ -21,12 +21,7 @@ func RandomHash() types.Hash {
 	return types.HashFromBytes(RandomBytes(32))
 }
 
-// NewRandomTransaction return a new random transaction whithout signature.
-func NewRandomTransaction(size int) *core.Transaction {
-	return core.NewTransaction(RandomBytes(size))
-}
-
-func NewRandomTransactionWithSignature(t *testing.T, privKey crypto.PrivateKey, size int) *core.Transaction {
+func NewRandomTransactionWithSignature(t *testing.T, privKey crypto.PrivateKey, size uint64) *core.Transaction {
 	tx := NewRandomTransaction(size)
 	assert.Nil(t, tx.Sign(privKey))
 	return tx

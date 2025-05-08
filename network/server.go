@@ -142,7 +142,13 @@ free:
 	for {
 		select {
 		case peer := <-s.peerCh:
+			s.mu.Lock()
+			// Check if we already have this peer
+			if existingPeer, exists := s.peerMap[peer.conn.RemoteAddr()]; exists {
+				existingPeer.Close()
+			}
 			s.peerMap[peer.conn.RemoteAddr()] = peer
+			s.mu.Unlock()
 
 			go peer.readLoop(s.rpcCh)
 
@@ -175,6 +181,13 @@ free:
 			break free
 		}
 	}
+
+	// Cleanup all peers on shutdown
+	s.mu.Lock()
+	for _, peer := range s.peerMap {
+		peer.Close()
+	}
+	s.mu.Unlock()
 
 	s.Logger.Log("msg", "Server is shutting down")
 }
@@ -270,10 +283,29 @@ func (s *Server) sendGetStatusMessage(peer *TCPPeer) error {
 func (s *Server) broadcast(payload []byte) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
+	var disconnectedPeers []net.Addr
+
 	for netAddr, peer := range s.peerMap {
 		if err := peer.Send(payload); err != nil {
-			fmt.Printf("peer send error => addr %s [err: %s]\n", netAddr, err)
+			s.Logger.Log("msg", "failed to send to peer", "addr", netAddr, "err", err)
+			disconnectedPeers = append(disconnectedPeers, netAddr)
 		}
+	}
+
+	// Clean up disconnected peers
+	if len(disconnectedPeers) > 0 {
+		s.mu.RUnlock()
+		s.mu.Lock()
+		for _, addr := range disconnectedPeers {
+			if peer, ok := s.peerMap[addr]; ok {
+				peer.Close()
+				delete(s.peerMap, addr)
+				s.Logger.Log("msg", "removed disconnected peer", "addr", addr)
+			}
+		}
+		s.mu.Unlock()
+		s.mu.RLock()
 	}
 
 	return nil
@@ -451,7 +483,6 @@ func (s *Server) createNewBlock() error {
 		return err
 	}
 
-	// TODO(@anthdm): pending pool of tx should only reflect on validator nodes.
 	// Right now "normal nodes" does not have their pending pool cleared.
 	s.mempool.ClearPending()
 

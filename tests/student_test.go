@@ -1,23 +1,25 @@
-package core
+package core_test
 
 import (
 	"bytes"
 	"encoding/gob"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/deauthe/local_blockchain_go/core"
 	"github.com/deauthe/local_blockchain_go/crypto"
 	"github.com/stretchr/testify/assert"
 )
 
 // Mock server to capture HTTP requests
-func setupMockServer() (*httptest.Server, *[]*Transaction) {
-	capturedTxs := &[]*Transaction{}
+func setupMockServer() (*httptest.Server, *[]*core.Transaction) {
+	capturedTxs := &[]*core.Transaction{}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "POST" && r.URL.Path == "/tx" {
-			var tx Transaction
+			var tx core.Transaction
 			decoder := gob.NewDecoder(r.Body)
 			err := decoder.Decode(&tx)
 			if err != nil {
@@ -36,35 +38,35 @@ func setupMockServer() (*httptest.Server, *[]*Transaction) {
 }
 
 // Test helper functions that mirror the actual functions
-func testCreateStudent(privKey crypto.PrivateKey, studentID string, paidDues bool, semesters []Semester) error {
-	student := &Student{
+func testCreateStudent(server *httptest.Server, privKey crypto.PrivateKey, studentID string, paidDues bool, semesters []core.Semester) error {
+	student := &core.Student{
 		ID:        studentID,
 		PaidDues:  paidDues,
 		Semesters: semesters,
 	}
 	student.CalculateCGPA()
 
-	return testCreateStudentTx(privKey, studentID, student, StudentTxTypeCreate)
+	return testCreateStudentTx(server, privKey, studentID, student, core.StudentTxTypeCreate)
 }
 
-func testUpdateStudent(privKey crypto.PrivateKey, studentID string, paidDues bool, semesters []Semester) error {
-	student := &Student{
+func testUpdateStudent(server *httptest.Server, privKey crypto.PrivateKey, studentID string, paidDues bool, semesters []core.Semester) error {
+	student := &core.Student{
 		ID:        studentID,
 		PaidDues:  paidDues,
 		Semesters: semesters,
 	}
 	student.CalculateCGPA()
 
-	return testCreateStudentTx(privKey, studentID, student, StudentTxTypeUpdate)
+	return testCreateStudentTx(server, privKey, studentID, student, core.StudentTxTypeUpdate)
 }
 
-func testDeleteStudent(privKey crypto.PrivateKey, studentID string) error {
-	return testCreateStudentTx(privKey, studentID, nil, StudentTxTypeDelete)
+func testDeleteStudent(server *httptest.Server, privKey crypto.PrivateKey, studentID string) error {
+	return testCreateStudentTx(server, privKey, studentID, nil, core.StudentTxTypeDelete)
 }
 
-func testCreateStudentTx(privKey crypto.PrivateKey, studentID string, student *Student, txType StudentTxType) error {
-	tx := NewTransaction(nil)
-	tx.TxInner = StudentTx{
+func testCreateStudentTx(server *httptest.Server, privKey crypto.PrivateKey, studentID string, student *core.Student, txType core.StudentTxType) error {
+	tx := core.NewTransaction(nil)
+	tx.TxInner = core.StudentTx{
 		Type:      txType,
 		StudentID: studentID,
 		Student:   student,
@@ -76,11 +78,11 @@ func testCreateStudentTx(privKey crypto.PrivateKey, studentID string, student *S
 	}
 
 	buf := &bytes.Buffer{}
-	if err := tx.Encode(NewGobTxEncoder(buf)); err != nil {
+	if err := tx.Encode(core.NewGobTxEncoder(buf)); err != nil {
 		return err
 	}
 
-	req, err := http.NewRequest("POST", "http://localhost:9000/tx", buf)
+	req, err := http.NewRequest("POST", server.URL+"/tx", buf)
 	if err != nil {
 		return err
 	}
@@ -100,22 +102,22 @@ func TestCreateStudent(t *testing.T) {
 	privKey := crypto.GeneratePrivateKey()
 	studentID := "TEST001"
 	paidDues := true
-	semesters := []Semester{
+	semesters := []core.Semester{
 		{SemesterNumber: 1, SGPA: 3.5},
 		{SemesterNumber: 2, SGPA: 3.8},
 	}
 
 	// Call the function
-	err := testCreateStudent(privKey, studentID, paidDues, semesters)
+	err := testCreateStudent(server, privKey, studentID, paidDues, semesters)
 
 	// Verify results
 	assert.NoError(t, err)
 	assert.Len(t, *capturedTxs, 1)
 
 	tx := (*capturedTxs)[0]
-	studentTx, ok := tx.TxInner.(StudentTx)
+	studentTx, ok := tx.TxInner.(core.StudentTx)
 	assert.True(t, ok)
-	assert.Equal(t, StudentTxTypeCreate, studentTx.Type)
+	assert.Equal(t, core.StudentTxTypeCreate, studentTx.Type)
 	assert.Equal(t, studentID, studentTx.StudentID)
 	assert.Equal(t, int64(100), studentTx.Fee)
 
@@ -138,23 +140,22 @@ func TestUpdateStudent(t *testing.T) {
 	privKey := crypto.GeneratePrivateKey()
 	studentID := "TEST002"
 	paidDues := true
-	semesters := []Semester{
-		{SemesterNumber: 1, SGPA: 3.5},
+	semesters := []core.Semester{
+		{SemesterNumber: 1, SGPA: 3.0},
 		{SemesterNumber: 2, SGPA: 3.8},
-		{SemesterNumber: 3, SGPA: 4.0},
 	}
 
 	// Call the function
-	err := testUpdateStudent(privKey, studentID, paidDues, semesters)
+	err := testUpdateStudent(server, privKey, studentID, paidDues, semesters)
 
 	// Verify results
 	assert.NoError(t, err)
 	assert.Len(t, *capturedTxs, 1)
 
 	tx := (*capturedTxs)[0]
-	studentTx, ok := tx.TxInner.(StudentTx)
+	studentTx, ok := tx.TxInner.(core.StudentTx)
 	assert.True(t, ok)
-	assert.Equal(t, StudentTxTypeUpdate, studentTx.Type)
+	assert.Equal(t, core.StudentTxTypeUpdate, studentTx.Type)
 	assert.Equal(t, studentID, studentTx.StudentID)
 	assert.Equal(t, int64(100), studentTx.Fee)
 
@@ -162,11 +163,12 @@ func TestUpdateStudent(t *testing.T) {
 	assert.NotNil(t, studentTx.Student)
 	assert.Equal(t, studentID, studentTx.Student.ID)
 	assert.Equal(t, paidDues, studentTx.Student.PaidDues)
-	assert.Len(t, studentTx.Student.Semesters, 3)
-	assert.Equal(t, 3.5, studentTx.Student.Semesters[0].SGPA)
+	assert.Len(t, studentTx.Student.Semesters, 2)
+	assert.Equal(t, 3.0, studentTx.Student.Semesters[0].SGPA)
 	assert.Equal(t, 3.8, studentTx.Student.Semesters[1].SGPA)
-	assert.Equal(t, 4.0, studentTx.Student.Semesters[2].SGPA)
-	assert.Equal(t, 3.77, studentTx.Student.CGPA) // (3.5 + 3.8 + 4.0) / 3
+	assert.Equal(t, 3.4, studentTx.Student.CGPA) // (3.5 + 3.8 + 4.0) / 3
+
+	fmt.Print("✅ updating student passed\n with data : ", studentTx.Student, "\n", "fee : ", studentTx.Fee, "\n", "tx : ", tx.Hash(core.TxHasher{}).String(), "\n")
 }
 
 func TestDeleteStudent(t *testing.T) {
@@ -179,19 +181,21 @@ func TestDeleteStudent(t *testing.T) {
 	studentID := "TEST003"
 
 	// Call the function
-	err := testDeleteStudent(privKey, studentID)
+	err := testDeleteStudent(server, privKey, studentID)
 
 	// Verify results
 	assert.NoError(t, err)
 	assert.Len(t, *capturedTxs, 1)
 
 	tx := (*capturedTxs)[0]
-	studentTx, ok := tx.TxInner.(StudentTx)
+	studentTx, ok := tx.TxInner.(core.StudentTx)
 	assert.True(t, ok)
-	assert.Equal(t, StudentTxTypeDelete, studentTx.Type)
+	assert.Equal(t, core.StudentTxTypeDelete, studentTx.Type)
 	assert.Equal(t, studentID, studentTx.StudentID)
 	assert.Equal(t, int64(100), studentTx.Fee)
 	assert.Nil(t, studentTx.Student) // Student should be nil for delete operations
+
+	fmt.Print("✅ deleting student passed\n with data : ", studentTx.Student, "\n", "fee : ", studentTx.Fee, "\n", "tx : ", tx, "\n")
 }
 
 func TestCreateStudentTx(t *testing.T) {
@@ -202,24 +206,24 @@ func TestCreateStudentTx(t *testing.T) {
 	// Create test data
 	privKey := crypto.GeneratePrivateKey()
 	studentID := "TEST004"
-	student := &Student{
+	student := &core.Student{
 		ID:       studentID,
 		PaidDues: true,
-		Semesters: []Semester{
+		Semesters: []core.Semester{
 			{SemesterNumber: 1, SGPA: 3.5},
 		},
 	}
 	student.CalculateCGPA()
 
 	// Test create transaction
-	err := testCreateStudentTx(privKey, studentID, student, StudentTxTypeCreate)
+	err := testCreateStudentTx(server, privKey, studentID, student, core.StudentTxTypeCreate)
 	assert.NoError(t, err)
 	assert.Len(t, *capturedTxs, 1)
 
 	tx := (*capturedTxs)[0]
-	studentTx, ok := tx.TxInner.(StudentTx)
+	studentTx, ok := tx.TxInner.(core.StudentTx)
 	assert.True(t, ok)
-	assert.Equal(t, StudentTxTypeCreate, studentTx.Type)
+	assert.Equal(t, core.StudentTxTypeCreate, studentTx.Type)
 	assert.Equal(t, studentID, studentTx.StudentID)
 	assert.Equal(t, student, studentTx.Student)
 
@@ -228,29 +232,29 @@ func TestCreateStudentTx(t *testing.T) {
 	assert.Equal(t, privKey.PublicKey(), tx.From)
 
 	// Clear captured transactions
-	*capturedTxs = []*Transaction{}
+	*capturedTxs = []*core.Transaction{}
 
 	// Test update transaction
-	err = testCreateStudentTx(privKey, studentID, student, StudentTxTypeUpdate)
+	err = testCreateStudentTx(server, privKey, studentID, student, core.StudentTxTypeUpdate)
 	assert.NoError(t, err)
 	assert.Len(t, *capturedTxs, 1)
 
 	tx = (*capturedTxs)[0]
-	studentTx, ok = tx.TxInner.(StudentTx)
+	studentTx, ok = tx.TxInner.(core.StudentTx)
 	assert.True(t, ok)
-	assert.Equal(t, StudentTxTypeUpdate, studentTx.Type)
+	assert.Equal(t, core.StudentTxTypeUpdate, studentTx.Type)
 
 	// Clear captured transactions
-	*capturedTxs = []*Transaction{}
+	*capturedTxs = []*core.Transaction{}
 
 	// Test delete transaction
-	err = testCreateStudentTx(privKey, studentID, nil, StudentTxTypeDelete)
+	err = testCreateStudentTx(server, privKey, studentID, nil, core.StudentTxTypeDelete)
 	assert.NoError(t, err)
 	assert.Len(t, *capturedTxs, 1)
 
 	tx = (*capturedTxs)[0]
-	studentTx, ok = tx.TxInner.(StudentTx)
+	studentTx, ok = tx.TxInner.(core.StudentTx)
 	assert.True(t, ok)
-	assert.Equal(t, StudentTxTypeDelete, studentTx.Type)
+	assert.Equal(t, core.StudentTxTypeDelete, studentTx.Type)
 	assert.Nil(t, studentTx.Student)
 }

@@ -38,6 +38,16 @@ type Block struct {
 	hash types.Hash
 }
 
+func init() {
+	// Register types for GOB encoding/decoding
+	gob.Register(&Block{})
+	gob.Register(&Header{})
+	gob.Register(&Transaction{})
+	gob.Register(types.Hash{})
+	gob.Register(&crypto.PublicKey{})
+	gob.Register(&crypto.Signature{})
+}
+
 func NewBlock(h *Header, txx []*Transaction) (*Block, error) {
 	return &Block{
 		Header:       h,

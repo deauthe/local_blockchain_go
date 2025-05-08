@@ -42,7 +42,7 @@ type Transaction struct {
 	Nonce     int64
 
 	// cached version of the tx data hash
-	hash types.Hash
+	TxHash types.Hash
 }
 
 func NewTransaction(data []byte) *Transaction {
@@ -53,10 +53,10 @@ func NewTransaction(data []byte) *Transaction {
 }
 
 func (tx *Transaction) Hash(hasher Hasher[*Transaction]) types.Hash {
-	if tx.hash.IsZero() {
-		tx.hash = hasher.Hash(tx)
+	if tx.TxHash.IsZero() {
+		tx.TxHash = hasher.Hash(tx)
 	}
-	return tx.hash
+	return tx.TxHash
 }
 
 func (tx *Transaction) Sign(privKey crypto.PrivateKey) error {
@@ -94,6 +94,10 @@ func (tx *Transaction) Encode(enc Encoder[*Transaction]) error {
 }
 
 func init() {
+	// Register types for GOB encoding/decoding
 	gob.Register(CollectionTx{})
 	gob.Register(MintTx{})
+	gob.Register(&Transaction{})
+	gob.Register(&crypto.PublicKey{})
+	gob.Register(&crypto.Signature{})
 }
