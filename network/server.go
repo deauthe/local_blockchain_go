@@ -160,6 +160,7 @@ free:
 			s.Logger.Log("msg", "peer added to the server", "outgoing", peer.Outgoing, "addr", peer.conn.RemoteAddr())
 
 		case tx := <-s.txChan:
+			fmt.Println("new transaction message: ", tx.TxHash)
 			if err := s.processTransaction(tx); err != nil {
 				s.Logger.Log("process TX error", err)
 			}
@@ -193,18 +194,37 @@ free:
 }
 
 func (s *Server) validatorLoop() {
+	s.Logger.Log("msg", "ticker initialized", "blockTime", s.BlockTime)
 	ticker := time.NewTicker(s.BlockTime)
+	defer ticker.Stop()
 
-	s.Logger.Log("msg", "Starting validator loop", "blockTime", s.BlockTime)
+	s.Logger.Log(
+		"msg", "Starting validator loop",
+		"blockTime", s.BlockTime,
+		"isValidator", s.isValidator,
+	)
 
 	for {
-		fmt.Println("creating new block")
+		select {
+		case <-ticker.C:
+			s.Logger.Log(
+				"msg", "validator tick",
+				"current_height", s.chain.Height(),
+				"mempool_size", s.mempool.PendingCount(),
+			)
 
-		if err := s.createNewBlock(); err != nil {
-			s.Logger.Log("create block error", err)
+			if err := s.createNewBlock(); err != nil {
+				s.Logger.Log(
+					"msg", "failed to create new block",
+					"error", err,
+					"current_height", s.chain.Height(),
+				)
+				continue
+			}
+		case <-s.quitCh:
+			s.Logger.Log("msg", "stopping validator loop")
+			return
 		}
-
-		<-ticker.C
 	}
 }
 
@@ -228,23 +248,68 @@ func (s *Server) ProcessMessage(msg *DecodedMessage) error {
 }
 
 func (s *Server) processGetBlocksMessage(from net.Addr, data *GetBlocksMessage) error {
-	s.Logger.Log("msg", "received getBlocks message", "from", from)
-
-	var (
-		blocks    = []*core.Block{}
-		ourHeight = s.chain.Height()
+	s.Logger.Log(
+		"msg", "received getBlocks message",
+		"from", from,
+		"from_height", data.From,
+		"to_height", data.To,
 	)
 
-	if data.To == 0 {
-		for i := int(data.From); i <= int(ourHeight); i++ {
-			block, err := s.chain.GetBlock(uint32(i))
-			if err != nil {
-				return err
-			}
+	var blocks []*core.Block
+	ourHeight := s.chain.Height()
 
-			blocks = append(blocks, block)
-		}
+	// If To is 0, send all blocks from From to our current height
+	endHeight := data.To
+	if endHeight == 0 {
+		endHeight = ourHeight
 	}
+
+	// Ensure we don't request blocks beyond our height
+	if endHeight > ourHeight {
+		endHeight = ourHeight
+	}
+
+	// Requested height is too high
+	if data.From > ourHeight {
+		s.Logger.Log(
+			"msg", "requested height too high",
+			"requested", data.From,
+			"our_height", ourHeight,
+		)
+		return nil
+	}
+
+	// Get blocks in the requested range
+	for height := data.From; height <= endHeight; height++ {
+		block, err := s.chain.GetBlock(height)
+		if err != nil {
+			s.Logger.Log(
+				"msg", "failed to get block",
+				"height", height,
+				"error", err,
+			)
+			continue
+		}
+		blocks = append(blocks, block)
+	}
+
+	if len(blocks) == 0 {
+		s.Logger.Log(
+			"msg", "no blocks to send",
+			"from", from,
+			"from_height", data.From,
+			"to_height", endHeight,
+		)
+		return nil
+	}
+
+	s.Logger.Log(
+		"msg", "sending blocks",
+		"from", from,
+		"num_blocks", len(blocks),
+		"from_height", blocks[0].Height,
+		"to_height", blocks[len(blocks)-1].Height,
+	)
 
 	blocksMsg := &BlocksMessage{
 		Blocks: blocks,
@@ -252,19 +317,25 @@ func (s *Server) processGetBlocksMessage(from net.Addr, data *GetBlocksMessage) 
 
 	buf := new(bytes.Buffer)
 	if err := gob.NewEncoder(buf).Encode(blocksMsg); err != nil {
-		return err
+		return fmt.Errorf("failed to encode blocks message: %w", err)
 	}
 
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	msg := NewMessage(MessageTypeBlocks, buf.Bytes())
 	peer, ok := s.peerMap[from]
 	if !ok {
-		return fmt.Errorf("peer %s not known", peer.conn.RemoteAddr())
+		s.mu.RUnlock()
+		return fmt.Errorf("peer %s not known", from)
 	}
 
-	return peer.Send(msg.Bytes())
+	msg := NewMessage(MessageTypeBlocks, buf.Bytes())
+	err := peer.Send(msg.Bytes())
+	s.mu.RUnlock()
+
+	if err != nil {
+		return fmt.Errorf("failed to send blocks message: %w", err)
+	}
+
+	return nil
 }
 
 func (s *Server) sendGetStatusMessage(peer *TCPPeer) error {
@@ -312,139 +383,196 @@ func (s *Server) broadcast(payload []byte) error {
 }
 
 func (s *Server) processBlocksMessage(from net.Addr, data *BlocksMessage) error {
-	s.Logger.Log("msg", "received BLOCKS!!!!!!!!", "from", from)
+	s.Logger.Log(
+		"msg", "processing blocks message",
+		"from", from,
+		"num_blocks", len(data.Blocks),
+	)
 
+	if len(data.Blocks) == 0 {
+		s.Logger.Log("msg", "received empty blocks message", "from", from)
+		return nil
+	}
+
+	// Process blocks in order
 	for _, block := range data.Blocks {
-		if err := s.chain.AddBlock(block); err != nil {
-			s.Logger.Log("error", err.Error())
-			return err
+		s.Logger.Log(
+			"msg", "processing block from message",
+			"height", block.Height,
+			"hash", block.Hash(core.BlockHasher{}),
+			"transactions", len(block.Transactions),
+		)
+
+		// First verify the block
+		if err := block.Verify(); err != nil {
+			s.Logger.Log(
+				"msg", "block verification failed",
+				"height", block.Height,
+				"hash", block.Hash(core.BlockHasher{}),
+				"error", err,
+			)
+			continue
 		}
+
+		// Try to add the block to our chain
+		if err := s.chain.AddBlock(block); err != nil {
+			if err == core.ErrBlockKnown {
+				s.Logger.Log(
+					"msg", "block already known",
+					"height", block.Height,
+					"hash", block.Hash(core.BlockHasher{}),
+				)
+				continue
+			}
+			s.Logger.Log(
+				"msg", "failed to add block",
+				"height", block.Height,
+				"hash", block.Hash(core.BlockHasher{}),
+				"error", err,
+			)
+			continue
+		}
+
+		// Remove any transactions in the block from our mempool
+		for _, tx := range block.Transactions {
+			s.mempool.Remove(tx.Hash(core.TxHasher{}))
+		}
+
+		s.Logger.Log(
+			"msg", "successfully processed block from message",
+			"height", block.Height,
+			"hash", block.Hash(core.BlockHasher{}),
+			"transactions", len(block.Transactions),
+		)
+
+		// Broadcast the block to other peers
+		go s.broadcastBlock(block)
 	}
 
 	return nil
 }
 
 func (s *Server) processStatusMessage(from net.Addr, data *StatusMessage) error {
-	s.Logger.Log("msg", "received STATUS message", "from", from)
+	s.Logger.Log(
+		"msg", "received status message",
+		"from", from,
+		"height", data.CurrentHeight,
+		"our_height", s.chain.Height(),
+	)
 
-	if data.CurrentHeight <= s.chain.Height() {
-		s.Logger.Log("msg", "cannot sync blockHeight to low", "ourHeight", s.chain.Height(), "theirHeight", data.CurrentHeight, "addr", from)
-		return nil
+	// If our height is lower, request blocks
+	if s.chain.Height() < data.CurrentHeight {
+		s.Logger.Log(
+			"msg", "our height is lower, requesting blocks",
+			"our_height", s.chain.Height(),
+			"peer_height", data.CurrentHeight,
+			"from", from,
+		)
+
+		// Request blocks starting from our current height + 1
+		msg := &GetBlocksMessage{
+			From: s.chain.Height() + 1,
+			To:   data.CurrentHeight,
+		}
+
+		if err := s.sendGetBlocksMessage(from, msg); err != nil {
+			s.Logger.Log(
+				"msg", "failed to send get blocks message",
+				"error", err,
+				"from", from,
+			)
+			return fmt.Errorf("failed to send get blocks message: %w", err)
+		}
 	}
-
-	go s.requestBlocksLoop(from)
 
 	return nil
 }
 
-func (s *Server) processGetStatusMessage(from net.Addr, data *GetStatusMessage) error {
-	s.Logger.Log("msg", "received getStatus message", "from", from)
+func (s *Server) sendGetBlocksMessage(to net.Addr, msg *GetBlocksMessage) error {
+	s.Logger.Log(
+		"msg", "sending get blocks message",
+		"to", to,
+		"from_height", msg.From,
+		"to_height", msg.To,
+	)
 
-	statusMessage := &StatusMessage{
-		CurrentHeight: s.chain.Height(),
-		ID:            s.ID,
+	// Encode the message
+	encodedMsg, err := msg.Encode()
+	if err != nil {
+		return fmt.Errorf("failed to encode get blocks message: %w", err)
 	}
 
-	buf := new(bytes.Buffer)
-	if err := gob.NewEncoder(buf).Encode(statusMessage); err != nil {
-		return err
+	// Create RPC message
+	rpcMsg := NewMessage(MessageTypeGetBlocks, encodedMsg)
+
+	// Find the peer
+	peer, ok := s.peerMap[to]
+	if !ok {
+		return fmt.Errorf("peer not found: %s", to)
 	}
+
+	// Send the message
+	if err := peer.Send(rpcMsg.Bytes()); err != nil {
+		return fmt.Errorf("failed to send message to peer: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Server) broadcastBlock(b *core.Block) error {
+	s.Logger.Log(
+		"msg", "broadcasting block",
+		"height", b.Height,
+		"hash", b.Hash(core.BlockHasher{}),
+		"transactions", len(b.Transactions),
+	)
+
+	buf := &bytes.Buffer{}
+	if err := b.Encode(core.NewGobBlockEncoder(buf)); err != nil {
+		return fmt.Errorf("failed to encode block: %v", err)
+	}
+
+	msg := NewMessage(MessageTypeBlock, buf.Bytes())
+	payload := msg.Bytes()
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	peer, ok := s.peerMap[from]
-	if !ok {
-		return fmt.Errorf("peer %s not known", peer.conn.RemoteAddr())
-	}
-
-	msg := NewMessage(MessageTypeStatus, buf.Bytes())
-
-	return peer.Send(msg.Bytes())
-}
-
-func (s *Server) processBlock(b *core.Block) error {
-	if err := s.chain.AddBlock(b); err != nil {
-		s.Logger.Log("error", err.Error())
-		return err
-	}
-
-	go s.broadcastBlock(b)
-
-	return nil
-}
-
-func (s *Server) processTransaction(tx *core.Transaction) error {
-	hash := tx.Hash(core.TxHasher{})
-
-	if s.mempool.Contains(hash) {
-		return nil
-	}
-
-	if err := tx.Verify(); err != nil {
-		return err
-	}
-
-	// s.Logger.Log(
-	// 	"msg", "adding new tx to mempool",
-	// 	"hash", hash,
-	// 	"mempoolPending", s.mempool.PendingCount(),
-	// )
-
-	go s.broadcastTx(tx)
-
-	s.mempool.Add(tx)
-
-	return nil
-}
-
-// TODO: Find a way to make sure we dont keep syncing when we are at the highest
-// block height in the network.
-func (s *Server) requestBlocksLoop(peer net.Addr) error {
-	ticker := time.NewTicker(3 * time.Second)
-
-	for {
-		ourHeight := s.chain.Height()
-
-		s.Logger.Log("msg", "requesting new blocks", "requesting height", ourHeight+1)
-
-		// In this case we are 100% sure that the node has blocks heigher than us.
-		getBlocksMessage := &GetBlocksMessage{
-			From: ourHeight + 1,
-			To:   0,
+	var failedPeers []net.Addr
+	for addr, peer := range s.peerMap {
+		if err := peer.Send(payload); err != nil {
+			s.Logger.Log(
+				"msg", "failed to send block to peer",
+				"addr", addr,
+				"err", err,
+			)
+			failedPeers = append(failedPeers, addr)
+			continue
 		}
+		s.Logger.Log(
+			"msg", "sent block to peer",
+			"addr", addr,
+			"height", b.Height,
+			"hash", b.Hash(core.BlockHasher{}),
+		)
+	}
 
-		buf := new(bytes.Buffer)
-		if err := gob.NewEncoder(buf).Encode(getBlocksMessage); err != nil {
-			return err
+	// Clean up disconnected peers
+	if len(failedPeers) > 0 {
+		s.mu.RUnlock()
+		s.mu.Lock()
+		for _, addr := range failedPeers {
+			if peer, ok := s.peerMap[addr]; ok {
+				peer.Close()
+				delete(s.peerMap, addr)
+				s.Logger.Log("msg", "removed disconnected peer", "addr", addr)
+			}
 		}
-
+		s.mu.Unlock()
 		s.mu.RLock()
-		defer s.mu.RUnlock()
-
-		msg := NewMessage(MessageTypeGetBlocks, buf.Bytes())
-		peer, ok := s.peerMap[peer]
-		if !ok {
-			return fmt.Errorf("peer %s not known", peer.conn.RemoteAddr())
-		}
-
-		if err := peer.Send(msg.Bytes()); err != nil {
-			s.Logger.Log("error", "failed to send to peer", "err", err, "peer", peer)
-		}
-
-		<-ticker.C
-	}
-}
-
-func (s *Server) broadcastBlock(b *core.Block) error {
-	buf := &bytes.Buffer{}
-	if err := b.Encode(core.NewGobBlockEncoder(buf)); err != nil {
-		return err
 	}
 
-	msg := NewMessage(MessageTypeBlock, buf.Bytes())
-
-	return s.broadcast(msg.Bytes())
+	return nil
 }
 
 func (s *Server) broadcastTx(tx *core.Transaction) error {
@@ -460,33 +588,117 @@ func (s *Server) broadcastTx(tx *core.Transaction) error {
 
 func (s *Server) createNewBlock() error {
 	currentHeader, err := s.chain.GetHeader(s.chain.Height())
+	fmt.Print("creating a block")
+	defer func() {
+		if r := recover(); r != nil {
+			s.Logger.Log("msg", "panic in validator loop", "error", r)
+		}
+	}()
+
 	if err != nil {
-		return err
+		s.Logger.Log(
+			"msg", "failed to get current header",
+			"error", err,
+			"height", s.chain.Height(),
+		)
+		return fmt.Errorf("failed to get current header: %v", err)
 	}
 
-	// For now we are going to use all transactions that are in the pending pool
-	// Later on when we know the internal structure of our transaction
-	// we will implement some kind of complexity function to determine how
-	// many transactions can be included in a block.
+	// Get pending transactions from mempool
 	txx := s.mempool.Pending()
+	s.Logger.Log(
+		"msg", "creating new block",
+		"current_height", currentHeader.Height,
+		"next_height", currentHeader.Height+1,
+		"transactions", len(txx),
+		"mempool_size", s.mempool.PendingCount(),
+	)
 
+	// Create new block
 	block, err := core.NewBlockFromPrevHeader(currentHeader, txx)
 	if err != nil {
-		return err
+		s.Logger.Log(
+			"msg", "failed to create new block",
+			"error", err,
+			"current_height", currentHeader.Height,
+		)
+		return fmt.Errorf("failed to create new block: %v", err)
 	}
 
+	s.Logger.Log(
+		"msg", "created new block",
+		"height", block.Height,
+		"prev_hash", block.PrevBlockHash,
+		"data_hash", block.DataHash,
+		"transactions", len(block.Transactions),
+	)
+
+	// Double check the block height
+	if block.Height != currentHeader.Height+1 {
+		s.Logger.Log(
+			"msg", "invalid block height",
+			"expected", currentHeader.Height+1,
+			"got", block.Height,
+		)
+		return fmt.Errorf("invalid block height: expected %d, got %d", currentHeader.Height+1, block.Height)
+	}
+
+	// Sign the block with our validator key
 	if err := block.Sign(*s.PrivateKey); err != nil {
-		return err
+		s.Logger.Log(
+			"msg", "failed to sign block",
+			"height", block.Height,
+			"error", err,
+		)
+		return fmt.Errorf("failed to sign block: %v", err)
 	}
 
+	s.Logger.Log(
+		"msg", "signed block",
+		"height", block.Height,
+		"validator", block.Validator,
+	)
+
+	// Add block to our chain
 	if err := s.chain.AddBlock(block); err != nil {
-		return err
+		if err == core.ErrBlockKnown {
+			s.Logger.Log(
+				"msg", "block already known",
+				"height", block.Height,
+				"hash", block.Hash(core.BlockHasher{}),
+			)
+			return nil
+		}
+		s.Logger.Log(
+			"msg", "failed to add block",
+			"height", block.Height,
+			"hash", block.Hash(core.BlockHasher{}),
+			"error", err,
+			"current_height", s.chain.Height(),
+		)
+		return fmt.Errorf("failed to add block: %v", err)
 	}
 
-	// Right now "normal nodes" does not have their pending pool cleared.
+	// Clear pending transactions that were included in the block
 	s.mempool.ClearPending()
 
-	go s.broadcastBlock(block)
+	// Broadcast the new block to peers synchronously
+	if err := s.broadcastBlock(block); err != nil {
+		s.Logger.Log(
+			"msg", "failed to broadcast block",
+			"height", block.Height,
+			"hash", block.Hash(core.BlockHasher{}),
+			"error", err,
+		)
+	}
+
+	s.Logger.Log(
+		"msg", "created and added new block",
+		"height", block.Height,
+		"hash", block.Hash(core.BlockHasher{}),
+		"transactions", len(block.Transactions),
+		"current_height", s.chain.Height(),
+	)
 
 	return nil
 }
@@ -514,4 +726,121 @@ func genesisBlock() *core.Block {
 	}
 
 	return b
+}
+
+func (s *Server) processBlock(b *core.Block) error {
+	s.Logger.Log(
+		"msg", "processing block",
+		"height", b.Height,
+		"current_height", s.chain.Height(),
+		"hash", b.Hash(core.BlockHasher{}),
+		"transactions", len(b.Transactions),
+	)
+
+	// First verify the block
+	if err := b.Verify(); err != nil {
+		s.Logger.Log(
+			"msg", "block verification failed",
+			"height", b.Height,
+			"hash", b.Hash(core.BlockHasher{}),
+			"error", err,
+		)
+		return fmt.Errorf("block verification failed: %v", err)
+	}
+
+	// Try to add the block to our chain
+	if err := s.chain.AddBlock(b); err != nil {
+		if err == core.ErrBlockKnown {
+			s.Logger.Log(
+				"msg", "block already known",
+				"height", b.Height,
+				"hash", b.Hash(core.BlockHasher{}),
+			)
+			return nil
+		}
+		s.Logger.Log(
+			"msg", "failed to add block",
+			"height", b.Height,
+			"hash", b.Hash(core.BlockHasher{}),
+			"error", err,
+		)
+		return fmt.Errorf("failed to add block: %v", err)
+	}
+
+	// Remove any transactions in the block from our mempool
+	for _, tx := range b.Transactions {
+		s.mempool.Remove(tx.Hash(core.TxHasher{}))
+	}
+
+	// Broadcast the block to other peers synchronously
+	if err := s.broadcastBlock(b); err != nil {
+		s.Logger.Log(
+			"msg", "failed to broadcast block",
+			"height", b.Height,
+			"hash", b.Hash(core.BlockHasher{}),
+			"error", err,
+		)
+	}
+
+	s.Logger.Log(
+		"msg", "successfully processed block",
+		"height", b.Height,
+		"current_height", s.chain.Height(),
+		"hash", b.Hash(core.BlockHasher{}),
+		"transactions", len(b.Transactions),
+	)
+
+	return nil
+}
+
+func (s *Server) processTransaction(tx *core.Transaction) error {
+	hash := tx.TxHash
+
+	if s.mempool.Contains(hash) {
+		return nil
+	}
+
+	if err := tx.Verify(); err != nil {
+		return err
+	}
+
+	go s.broadcastTx(tx)
+
+	s.mempool.Add(tx)
+
+	return nil
+}
+
+func (s *Server) processGetStatusMessage(from net.Addr, data *GetStatusMessage) error {
+	s.Logger.Log("msg", "received getStatus message", "from", from)
+
+	statusMessage := &StatusMessage{
+		CurrentHeight: s.chain.Height(),
+		ID:            s.ID,
+	}
+
+	buf := new(bytes.Buffer)
+	if err := gob.NewEncoder(buf).Encode(statusMessage); err != nil {
+		return err
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	peer, ok := s.peerMap[from]
+	if !ok {
+		return fmt.Errorf("peer %s not known", from)
+	}
+
+	msg := NewMessage(MessageTypeStatus, buf.Bytes())
+
+	return peer.Send(msg.Bytes())
+}
+
+func (msg *GetBlocksMessage) Encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	if err := gob.NewEncoder(buf).Encode(msg); err != nil {
+		return nil, fmt.Errorf("failed to encode GetBlocksMessage: %w", err)
+	}
+	return buf.Bytes(), nil
 }

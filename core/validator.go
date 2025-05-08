@@ -22,27 +22,45 @@ func NewBlockValidator(bc *Blockchain) *BlockValidator {
 }
 
 func (v *BlockValidator) ValidateBlock(b *Block) error {
+	currentHeight := v.bc.Height()
+
 	if v.bc.HasBlock(b.Height) {
-		// return fmt.Errorf("chain already contains block (%d) with hash (%s)", b.Height, b.Hash(BlockHasher{}))
 		return ErrBlockKnown
 	}
 
-	if b.Height != v.bc.Height()+1 {
-		return fmt.Errorf("block (%s) with height (%d) is too high => current height (%d)", b.Hash(BlockHasher{}), b.Height, v.bc.Height())
+	// Allow blocks that are at most 1 height ahead
+	if b.Height > currentHeight+1 {
+		return fmt.Errorf("block height too high: got %d, current height is %d", b.Height, currentHeight)
 	}
 
-	prevHeader, err := v.bc.GetHeader(b.Height - 1)
-	if err != nil {
-		return err
+	// If this is not the genesis block, validate the previous block hash
+	if b.Height > 0 {
+		// Get the previous header for validation
+		prevHeader, err := v.bc.GetHeader(b.Height - 1)
+		if err != nil {
+			return fmt.Errorf("failed to get previous header: %v", err)
+		}
+
+		hash := BlockHasher{}.Hash(prevHeader)
+		if hash != b.PrevBlockHash {
+			return fmt.Errorf("invalid previous block hash: expected %s, got %s",
+				hash, b.PrevBlockHash)
+		}
 	}
 
-	hash := BlockHasher{}.Hash(prevHeader)
-	if hash != b.PrevBlockHash {
-		return fmt.Errorf("the hash of the previous block (%s) is invalid", b.PrevBlockHash)
-	}
-
+	// Verify block signature and transactions
 	if err := b.Verify(); err != nil {
-		return err
+		return fmt.Errorf("block verification failed: %v", err)
+	}
+
+	// Verify data hash
+	dataHash, err := CalculateDataHash(b.Transactions)
+	if err != nil {
+		return fmt.Errorf("failed to calculate data hash: %v", err)
+	}
+	if dataHash != b.DataHash {
+		return fmt.Errorf("invalid data hash: expected %s, got %s",
+			dataHash, b.DataHash)
 	}
 
 	return nil

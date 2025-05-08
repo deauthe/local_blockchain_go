@@ -29,11 +29,11 @@ func main() {
 	go localNode.Start()
 
 	// Create remote nodes for network
-	remoteNodeB := makeServer("REMOTE_NODE", nil, ":5000", nil, "", logger)
-	go remoteNodeB.Start()
-
 	remoteNode := makeServer("REMOTE_NODE_B", nil, ":4000", []string{":5000"}, "", logger)
 	go remoteNode.Start()
+
+	remoteNodeB := makeServer("REMOTE_NODE", nil, ":5000", nil, "", logger)
+	go remoteNodeB.Start()
 
 	// Wait for network to stabilize
 	time.Sleep(2 * time.Second)
@@ -134,8 +134,23 @@ func createStudentTx(privKey crypto.PrivateKey, studentID string, student *core.
 		return err
 	}
 
-	client := http.Client{}
-	_, err = client.Do(req)
+	client := http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("http error: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Read response
+	respBody := new(bytes.Buffer)
+	respBody.ReadFrom(resp.Body)
+
+	// Log status and body
+	fmt.Printf("[HTTP %s] %s\n", resp.Status, respBody.String())
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("received non-200 response: %s", resp.Status)
+	}
 
 	return err
 }

@@ -47,7 +47,8 @@ func main() {
 				continue
 			}
 			for _, tx := range block.Transactions {
-				if tx.Hash(core.TxHasher{}) == hash {
+				fmt.Print("considering tx:", tx.TxHash)
+				if tx.TxHash == hash {
 					// Convert transaction to JSON
 					var jsonData []byte
 					if *pretty {

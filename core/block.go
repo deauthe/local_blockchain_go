@@ -58,7 +58,7 @@ func NewBlock(h *Header, txx []*Transaction) (*Block, error) {
 func NewBlockFromPrevHeader(prevHeader *Header, txx []*Transaction) (*Block, error) {
 	dataHash, err := CalculateDataHash(txx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to calculate data hash: %v", err)
 	}
 
 	header := &Header{
@@ -69,7 +69,22 @@ func NewBlockFromPrevHeader(prevHeader *Header, txx []*Transaction) (*Block, err
 		Timestamp:     time.Now().UnixNano(),
 	}
 
-	return NewBlock(header, txx)
+	block, err := NewBlock(header, txx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create block: %v", err)
+	}
+
+	// Verify the block's data hash matches
+	verifyHash, err := CalculateDataHash(block.Transactions)
+	if err != nil {
+		return nil, fmt.Errorf("failed to verify data hash: %v", err)
+	}
+	if verifyHash != block.DataHash {
+		return nil, fmt.Errorf("data hash mismatch: expected %s, got %s",
+			verifyHash, block.DataHash)
+	}
+
+	return block, nil
 }
 
 func (b *Block) AddTransaction(tx *Transaction) {

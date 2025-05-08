@@ -97,6 +97,8 @@ func init() {
 	// Register types for GOB encoding/decoding
 	gob.Register(CollectionTx{})
 	gob.Register(MintTx{})
+	gob.Register(StudentTx{})
+	gob.Register(StudentTxType(0))
 	gob.Register(&Transaction{})
 	gob.Register(&crypto.PublicKey{})
 	gob.Register(&crypto.Signature{})

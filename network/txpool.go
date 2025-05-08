@@ -40,6 +40,11 @@ func (p *TxPool) Contains(hash types.Hash) bool {
 	return p.all.Contains(hash)
 }
 
+func (p *TxPool) Remove(hash types.Hash) {
+	p.pending.Remove(hash)
+	p.all.Remove(hash)
+}
+
 // Pending returns a slice of transactions that are in the pending pool
 func (p *TxPool) Pending() []*core.Transaction {
 	return p.pending.txx.Data

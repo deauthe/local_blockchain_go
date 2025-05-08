@@ -70,6 +70,12 @@ func (bc *Blockchain) SetValidator(v Validator) {
 
 func (bc *Blockchain) AddBlock(b *Block) error {
 	if err := bc.Validator.ValidateBlock(b); err != nil {
+		bc.logger.Log(
+			"msg", "block validation failed",
+			"height", b.Height,
+			"hash", b.Hash(BlockHasher{}),
+			"error", err,
+		)
 		return err
 	}
 
@@ -179,17 +185,21 @@ func (bc *Blockchain) handleStudentTx(tx *Transaction) error {
 		bc.logger.Log("msg", fmt.Sprintf("Handled student transaction for ID: %s (took %v)", tx.TxInner.(StudentTx).StudentID, elapsed))
 	}()
 
+	bc.logger.Log("msg", "Starting to handle student transaction")
 	studentTx, ok := tx.TxInner.(StudentTx)
 	if !ok {
+		bc.logger.Log("msg", "Failed to cast transaction to StudentTx", "error", "invalid student transaction type")
 		return fmt.Errorf("invalid student transaction type")
 	}
 
+	bc.logger.Log("msg", fmt.Sprintf("Processing student transaction type: %v for ID: %s", studentTx.Type, studentTx.StudentID))
 	bc.stateLock.Lock()
 	defer bc.stateLock.Unlock()
 
 	switch studentTx.Type {
 	case StudentTxTypeCreate:
 		if _, exists := bc.studentState[studentTx.StudentID]; exists {
+			bc.logger.Log("msg", "Student already exists", "id", studentTx.StudentID)
 			return fmt.Errorf("student with ID %s already exists", studentTx.StudentID)
 		}
 		bc.studentState[studentTx.StudentID] = studentTx.Student
@@ -198,6 +208,7 @@ func (bc *Blockchain) handleStudentTx(tx *Transaction) error {
 
 	case StudentTxTypeUpdate:
 		if _, exists := bc.studentState[studentTx.StudentID]; !exists {
+			bc.logger.Log("msg", "Student does not exist", "id", studentTx.StudentID)
 			return fmt.Errorf("student with ID %s does not exist", studentTx.StudentID)
 		}
 		bc.studentState[studentTx.StudentID] = studentTx.Student
@@ -206,6 +217,7 @@ func (bc *Blockchain) handleStudentTx(tx *Transaction) error {
 
 	case StudentTxTypeDelete:
 		if _, exists := bc.studentState[studentTx.StudentID]; !exists {
+			bc.logger.Log("msg", "Student does not exist", "id", studentTx.StudentID)
 			return fmt.Errorf("student with ID %s does not exist", studentTx.StudentID)
 		}
 		delete(bc.studentState, studentTx.StudentID)
@@ -217,6 +229,7 @@ func (bc *Blockchain) handleStudentTx(tx *Transaction) error {
 }
 
 func (bc *Blockchain) handleTransaction(tx *Transaction) error {
+	fmt.Print("handling tx")
 	startTime := time.Now()
 	defer func() {
 		elapsed := time.Since(startTime)
@@ -234,8 +247,12 @@ func (bc *Blockchain) handleTransaction(tx *Transaction) error {
 	}
 
 	// Handle student transactions
-	if _, ok := tx.TxInner.(StudentTx); ok {
+	bc.logger.Log("msg", fmt.Sprintf("Checking transaction type for hash: %s, TxInner type: %T", tx.Hash(TxHasher{}), tx.TxInner))
+	if studentTx, ok := tx.TxInner.(StudentTx); ok {
+		bc.logger.Log("msg", fmt.Sprintf("Found student transaction with ID: %s, type: %v", studentTx.StudentID, studentTx.Type))
 		return bc.handleStudentTx(tx)
+	} else {
+		bc.logger.Log("msg", fmt.Sprintf("Not a student transaction: %T", tx.TxInner))
 	}
 
 	// If the txInner of the transaction is not nil we need to handle
@@ -260,22 +277,41 @@ func (bc *Blockchain) addBlockWithoutValidation(b *Block) error {
 	startTime := time.Now()
 	defer func() {
 		elapsed := time.Since(startTime)
-		bc.logger.Log("msg", fmt.Sprintf("Added block with hash: %s, height: %d, transactions: %d (took %v)",
-			b.Hash(BlockHasher{}), b.Height, len(b.Transactions), elapsed))
+		bc.logger.Log(
+			"msg", "Added block",
+			"hash", b.Hash(BlockHasher{}),
+			"height", b.Height,
+			"transactions", len(b.Transactions),
+			"took", elapsed,
+		)
 	}()
 
 	bc.stateLock.Lock()
-	for i := 0; i < len(b.Transactions); i++ {
-		if err := bc.handleTransaction(b.Transactions[i]); err != nil {
-			bc.logger.Log("msg", fmt.Sprintf("Error handling transaction: %v", err))
+	// Create a new slice to store successful transactions
+	successfulTxs := make([]*Transaction, 0, len(b.Transactions))
 
-			b.Transactions[i] = b.Transactions[len(b.Transactions)-1]
-			b.Transactions = b.Transactions[:len(b.Transactions)-1]
-
+	for _, tx := range b.Transactions {
+		if err := bc.handleTransaction(tx); err != nil {
+			bc.logger.Log(
+				"msg", "Error handling transaction",
+				"error", err,
+				"txHash", tx.Hash(TxHasher{}),
+			)
 			continue
 		}
+		successfulTxs = append(successfulTxs, tx)
 	}
 	bc.stateLock.Unlock()
+
+	// Update the block's transactions with only the successful ones
+	b.Transactions = successfulTxs
+
+	bc.logger.Log(
+		"msg", "transactions processed",
+		"height", b.Height,
+		"hash", b.Hash(BlockHasher{}),
+		"transactions", len(b.Transactions),
+	)
 
 	bc.lock.Lock()
 	bc.Headers = append(bc.Headers, b.Header)
@@ -283,9 +319,16 @@ func (bc *Blockchain) addBlockWithoutValidation(b *Block) error {
 	bc.blockStore[b.Hash(BlockHasher{})] = b
 
 	for _, tx := range b.Transactions {
-		bc.txStore[tx.Hash(TxHasher{})] = tx
+		bc.txStore[tx.TxHash] = tx
 	}
 	bc.lock.Unlock()
+
+	bc.logger.Log(
+		"msg", "block added to chain",
+		"height", b.Height,
+		"hash", b.Hash(BlockHasher{}),
+		"transactions", len(b.Transactions),
+	)
 
 	return bc.store.Put(b)
 }

@@ -32,10 +32,10 @@ func NewPersistentStore() (*PersistentStore, error) {
 			return
 		}
 
-		// Open or create blocks file
+		// Open or create blocks file in append mode
 		blocksFile, err := os.OpenFile(
 			filepath.Join("data", "blocks.gob"),
-			os.O_CREATE|os.O_RDWR,
+			os.O_CREATE|os.O_RDWR|os.O_APPEND,
 			0644,
 		)
 		if err != nil {
